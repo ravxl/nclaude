@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# nclaude - Interactive Claude launcher with folder navigation
+
+CONFIG_DIR="$HOME/.config/nclaude"
+CONFIG_FILE="$CONFIG_DIR/folders.txt"
+
+mkdir -p "$CONFIG_DIR"
+touch "$CONFIG_FILE"
+
+# ── Colors ──
+P="\033[38;5;212m"   # pink
+R="\033[38;5;196m"   # red
+D="\033[2m"          # dim
+B="\033[1m"          # bold
+INV="\033[7m"        # inverse (highlight)
+RST="\033[0m"        # reset
+G="\033[38;5;245m"   # grey
+C="\033[38;5;117m"   # cyan/blue
+Y="\033[38;5;222m"   # yellow
+W="\033[38;5;255m"   # white
+
+# Breadcrumb trail - built up across steps
+BREADCRUMB=""
+
+# ── Paginated picker ──
+paginated_pick() {
+    local header="$1"
+    shift
+    local items=("$@")
+    local total=${#items[@]}
+    local page_size=10
+    local pages=$(( (total + page_size - 1) / page_size ))
+    local page=0
+    local cursor=0
+
+    stty -echo -icanon min 1 time 0 </dev/tty 2>/dev/null
+
+    _draw() {
+        {
+            printf '\033[2J\033[H'
+            local start=$(( page * page_size ))
+            local end=$(( start + page_size ))
+            [[ $end -gt $total ]] && end=$total
+
+            # Breadcrumb at top
+            if [[ -n "$BREADCRUMB" ]]; then
+                echo ""
+                echo -e "  ${G}${BREADCRUMB}${RST}"
+            fi
+
+            echo ""
+            echo -e "  ${B}${P}${header}${RST}"
+            echo ""
+
+            for (( i = start; i < end; i++ )); do
+                local idx=$(( i - start ))
+                if [[ $cursor -eq $idx ]]; then
+                    echo -e "  ${INV}${P} [${idx}] ${items[$i]} ${RST}"
+                else
+                    echo -e "  ${P} [${idx}]${RST} ${items[$i]}"
+                fi
+            done
+
+            echo ""
+            if [[ $pages -gt 1 ]]; then
+                echo -e "  ${D}Page $(( page + 1 ))/${pages}  ←/→ pages  ↑/↓ navigate  0-9 select  / search  Ctrl+C quit${RST}"
+            else
+                echo -e "  ${D}↑/↓ navigate  0-9 select  / search  Ctrl+C quit${RST}"
+            fi
+        } > /dev/tty
+    }
+
+    _cleanup() {
+        stty echo icanon </dev/tty 2>/dev/null
+        printf '\033[2J\033[H' > /dev/tty
+    }
+
+    _search() {
+        _cleanup
+        local result
+        result=$(printf '%s\n' "${items[@]}" | gum filter \
+            --header "$header" \
+            --placeholder "Search..." \
+            --prompt "> " \
+            --indicator.foreground "212" \
+            --match.foreground "212" \
+            --header.foreground "212" \
+            --prompt.foreground "212" < /dev/tty 2>/dev/tty)
+
+        if [[ -n "$result" ]]; then
+            echo "$result"
+            return 0
+        fi
+
+        stty -echo -icanon min 1 time 0 </dev/tty 2>/dev/null
+        return 1
+    }
+
+    _draw
+
+    while true; do
+        local key
+        IFS= read -rsn1 key </dev/tty
+
+        local start=$(( page * page_size ))
+        local end=$(( start + page_size ))
+        [[ $end -gt $total ]] && end=$total
+        local count=$(( end - start ))
+
+        case "$key" in
+            [0-9])
+                if [[ $key -lt $count ]]; then
+                    local selected_idx=$(( start + key ))
+                    _cleanup
+                    echo "${items[$selected_idx]}"
+                    return 0
+                fi
+                ;;
+
+            "")  # Enter
+                local selected_idx=$(( start + cursor ))
+                _cleanup
+                echo "${items[$selected_idx]}"
+                return 0
+                ;;
+
+            $'\x04')
+                _cleanup
+                return 1
+                ;;
+
+            $'\x1b')
+                local bracket arrow
+                IFS= read -rsn1 bracket </dev/tty
+                [[ "$bracket" != "[" ]] && { _draw; continue; }
+                IFS= read -rsn1 arrow </dev/tty
+                case "$arrow" in
+                        A)  # Up
+                            if [[ $cursor -gt 0 ]]; then
+                                (( cursor-- ))
+                            elif [[ $page -gt 0 ]]; then
+                                (( page-- ))
+                                local ps=$(( page * page_size ))
+                                local pe=$(( ps + page_size ))
+                                [[ $pe -gt $total ]] && pe=$total
+                                cursor=$(( pe - ps - 1 ))
+                            fi
+                            ;;
+                        B)  # Down
+                            if [[ $cursor -lt $(( count - 1 )) ]]; then
+                                (( cursor++ ))
+                            elif [[ $page -lt $(( pages - 1 )) ]]; then
+                                (( page++ ))
+                                cursor=0
+                            fi
+                            ;;
+                        C)  # Right - next page
+                            if [[ $page -lt $(( pages - 1 )) ]]; then
+                                (( page++ ))
+                                cursor=0
+                            fi
+                            ;;
+                        D)  # Left - prev page
+                            if [[ $page -gt 0 ]]; then
+                                (( page-- ))
+                                cursor=0
+                            fi
+                            ;;
+                esac
+                ;;
+
+            "/")
+                local search_result
+                search_result=$(_search)
+                if [[ $? -eq 0 && -n "$search_result" ]]; then
+                    echo "$search_result"
+                    return 0
+                fi
+                ;;
+
+            $'\x03')
+                _cleanup
+                return 1
+                ;;
+        esac
+
+        _draw
+    done
+}
+
+# Cleanup on exit
+trap 'stty echo icanon </dev/tty 2>/dev/null; exit 1' EXIT INT
+
+# ── Step 1: Choose Claude mode ──
+MODE=$(paginated_pick "Select Claude mode:" "Normal" "YOLO")
+[[ $? -ne 0 || -z "$MODE" ]] && exit 0
+
+BREADCRUMB="${C}${B}${MODE}${RST}"
+
+# ── Step 2: Choose or add a main folder ──
+while true; do
+    FOLDERS=()
+    if [[ -s "$CONFIG_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && FOLDERS+=("$line")
+        done < "$CONFIG_FILE"
+    fi
+
+    OPTIONS=("${FOLDERS[@]}" "Add new folder")
+
+    SELECTION=$(paginated_pick "Select main folder:" "${OPTIONS[@]}")
+    [[ $? -ne 0 || -z "$SELECTION" ]] && exit 0
+
+    if [[ "$SELECTION" == "Add new folder" ]]; then
+        NEW_FOLDER=$(gum file --directory "$HOME")
+        [[ -z "$NEW_FOLDER" ]] && continue
+        if ! grep -qxF "$NEW_FOLDER" "$CONFIG_FILE" 2>/dev/null; then
+            echo "$NEW_FOLDER" >> "$CONFIG_FILE"
+        fi
+        continue
+    fi
+
+    MAIN_FOLDER="$SELECTION"
+    break
+done
+
+FOLDER_NAME=$(basename "$MAIN_FOLDER")
+BREADCRUMB="${C}${B}${MODE}${RST} ${G}→${RST} ${Y}${B}${FOLDER_NAME}${RST}"
+
+# ── Step 3: List subfolders and pick one ──
+if [[ ! -d "$MAIN_FOLDER" ]]; then
+    echo -e "  ${R}Folder not found: $MAIN_FOLDER${RST}"
+    exit 1
+fi
+
+SUBFOLDERS=()
+while IFS= read -r d; do
+    SUBFOLDERS+=("$(basename "$d")")
+done < <(find "$MAIN_FOLDER" -mindepth 1 -maxdepth 1 -type d | sort)
+
+if [[ ${#SUBFOLDERS[@]} -eq 0 ]]; then
+    echo -e "  ${R}No subfolders found in $MAIN_FOLDER${RST}"
+    exit 1
+fi
+
+SUBFOLDER=$(paginated_pick "Select project folder:" "${SUBFOLDERS[@]}")
+[[ $? -ne 0 || -z "$SUBFOLDER" ]] && exit 0
+
+TARGET="$MAIN_FOLDER/$SUBFOLDER"
+
+# ── Step 4: Launch Claude ──
+echo ""
+if [[ "$MODE" == "YOLO" ]]; then
+    echo -e "  ${W}Opening Claude ${C}${B}YOLO${RST} ${W}mode on ${P}${B}${SUBFOLDER}${RST}"
+else
+    echo -e "  ${W}Opening Claude on ${P}${B}${SUBFOLDER}${RST}"
+fi
+echo ""
+
+cd "$TARGET" || exit 1
+
+if [[ "$MODE" == "YOLO" ]]; then
+    exec claude --dangerously-skip-permissions
+else
+    exec claude
+fi
