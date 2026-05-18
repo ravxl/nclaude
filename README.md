@@ -21,20 +21,46 @@ brew install gum
 
 ## Install
 
+### Option 1: Symlink (recommended for development)
+
 ```bash
-# Copy the script to your PATH
+ln -sf "$(pwd)/nclaude" ~/.local/bin/nclaude
+```
+
+### Option 2: Copy
+
+```bash
 cp nclaude ~/.local/bin/nclaude
 chmod +x ~/.local/bin/nclaude
+```
 
-# Make sure ~/.local/bin is in your PATH
+### Make sure `~/.local/bin` is in your PATH
+
+Add to your `~/.zshrc` (or `~/.bashrc`):
+
+```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+Then reload: `source ~/.zshrc`
 
 ## Usage
 
 ```bash
-nclaude
+nclaude              # Interactive folder + mode selection
+nclaude .            # Launch in current directory (pick mode)
+nclaude --here -Y    # Launch YOLO in current directory (no prompts)
+nclaude -H -N        # Launch Normal in current directory (no prompts)
 ```
+
+### Options
+
+| Flag | Description |
+|---|---|
+| `--here`, `-H`, `.` | Launch Claude in the current directory (skip folder selection) |
+| `--yolo`, `-Y` | Use YOLO mode (`--dangerously-skip-permissions`) |
+| `--normal`, `-N` | Use Normal mode |
+| `-h`, `--help` | Show help |
 
 ### Controls
 

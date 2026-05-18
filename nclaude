@@ -4,6 +4,51 @@
 CONFIG_DIR="$HOME/.config/nclaude"
 CONFIG_FILE="$CONFIG_DIR/folders.txt"
 
+# ── CLI flags ──
+USE_HERE=false
+FORCE_MODE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --here|-H|.)
+            USE_HERE=true
+            shift
+            ;;
+        --yolo|-Y)
+            FORCE_MODE="YOLO"
+            shift
+            ;;
+        --normal|-N)
+            FORCE_MODE="Normal"
+            shift
+            ;;
+        -h|--help)
+            cat <<'HELP'
+nclaude - Interactive Claude launcher
+
+Usage: nclaude [options]
+
+Options:
+  --here, -H, .    Launch Claude in the current directory (skip folder selection)
+  --yolo, -Y       Use YOLO mode (--dangerously-skip-permissions)
+  --normal, -N     Use Normal mode
+  -h, --help       Show this help
+
+Examples:
+  nclaude              Interactive folder + mode selection
+  nclaude .            Launch in current folder (pick mode)
+  nclaude --here -Y    Launch YOLO in current folder
+  nclaude -H -N        Launch Normal in current folder
+HELP
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1 (try --help)"
+            exit 1
+            ;;
+    esac
+done
+
 mkdir -p "$CONFIG_DIR"
 touch "$CONFIG_FILE"
 
@@ -192,10 +237,32 @@ paginated_pick() {
 trap 'stty echo icanon </dev/tty 2>/dev/null; exit 1' EXIT INT
 
 # ── Step 1: Choose Claude mode ──
-MODE=$(paginated_pick "Select Claude mode:" "Normal" "YOLO")
-[[ $? -ne 0 || -z "$MODE" ]] && exit 0
+if [[ -n "$FORCE_MODE" ]]; then
+    MODE="$FORCE_MODE"
+else
+    MODE=$(paginated_pick "Select Claude mode:" "Normal" "YOLO")
+    [[ $? -ne 0 || -z "$MODE" ]] && exit 0
+fi
 
 BREADCRUMB="${C}${B}${MODE}${RST}"
+
+# ── Quick launch: --here ──
+if $USE_HERE; then
+    TARGET="$(pwd)"
+    SUBFOLDER="$(basename "$TARGET")"
+    echo ""
+    if [[ "$MODE" == "YOLO" ]]; then
+        echo -e "  ${W}Opening Claude ${C}${B}YOLO${RST} ${W}mode on ${P}${B}${SUBFOLDER}${RST}"
+    else
+        echo -e "  ${W}Opening Claude on ${P}${B}${SUBFOLDER}${RST}"
+    fi
+    echo ""
+    if [[ "$MODE" == "YOLO" ]]; then
+        exec claude --dangerously-skip-permissions
+    else
+        exec claude
+    fi
+fi
 
 # ── Step 2: Choose or add a main folder ──
 while true; do
